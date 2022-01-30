@@ -134,6 +134,7 @@ static void start_memcpy_toio(struct litepcie_device *s,dma_addr_t dma_addr, u32
 
 	//pci_info(s->dev,"start_memcpy_toio\n");
 }
+/*
 static void start_memcpy_fromio(struct litepcie_device *s,dma_addr_t dma_addr, u32 soc_addr, u32 length)
 {
 	u32 round_length = ALIGN(length, ALIGN_SIZE);
@@ -145,7 +146,7 @@ static void start_memcpy_fromio(struct litepcie_device *s,dma_addr_t dma_addr, u
 
         //pci_info(s->dev,"start_memcpy_fromio\n");
 }
-
+*/
 static int liteeth_open(struct net_device *netdev)
 {
         struct liteeth *priv = netdev_priv(netdev);
@@ -154,6 +155,7 @@ static int liteeth_open(struct net_device *netdev)
 	netif_carrier_on(netdev);
 	netif_start_queue(netdev);
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,1);
+	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_WB2PCIE_DMA_HOST_BASE_ADDR_ADDR, priv->rx_base_dma);
 
 	return 0;
 }
@@ -233,7 +235,7 @@ static const struct net_device_ops liteeth_netdev_ops = {
 	.ndo_stop		= liteeth_stop,
 	.ndo_start_xmit         = liteeth_start_xmit,
 };
-
+/*
 static void handle_ethrx_interrupt(struct net_device *netdev)
 {
         struct liteeth *priv = netdev_priv(netdev);
@@ -260,6 +262,7 @@ rx_drop:
 
         return;
 }
+*/
 static void handle_ethtx_interrupt(struct net_device *netdev)
 {
 	struct liteeth *priv = netdev_priv(netdev);
@@ -272,7 +275,7 @@ static void handle_ethtx_interrupt(struct net_device *netdev)
 			netif_wake_queue(netdev);
 	}
 }
-static int handle_rxdata_interrupt(struct net_device *netdev)
+static int handle_ethrx_interrupt(struct net_device *netdev)
 {
  	struct liteeth *priv = netdev_priv(netdev);
  	struct litepcie_device *lpdev = priv->lpdev;
@@ -283,16 +286,18 @@ static int handle_rxdata_interrupt(struct net_device *netdev)
 
         rx_slot = litepcie_readl(lpdev,CSR_ETHMAC_SRAM_WRITER_SLOT_ADDR);
         len = litepcie_readl(lpdev,CSR_ETHMAC_SRAM_WRITER_LENGTH_ADDR);
-	litepcie_writel(lpdev,CSR_ETHMAC_SRAM_WRITER_ACK_ADDR, 1);
 
         skb = netdev_alloc_skb_ip_align(netdev, len);
         if (!skb) {
+		litepcie_writel(lpdev,CSR_ETHMAC_SRAM_WRITER_ACK_ADDR, 1);
                 netdev_err(netdev, "couldn't get memory\n");
                 goto rx_drop;
         }
 
         data = skb_put(skb, len);
         memcpy_fromio(data, priv->rx_base + rx_slot * priv->slot_size, len);
+	
+	litepcie_writel(lpdev,CSR_ETHMAC_SRAM_WRITER_ACK_ADDR, 1);
         skb->protocol = eth_type_trans(skb, netdev);
 
         netdev->stats.rx_packets++;
@@ -336,8 +341,8 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 		handle_ethrx_interrupt(netdev);
 	if (i == ETHTX_INTERRUPT)
 		handle_ethtx_interrupt(netdev);
-        if (i == RXDATA_INTERRUPT)
-	 	handle_rxdata_interrupt(netdev);
+//        if (i == RXDATA_INTERRUPT)
+//	 	handle_rxdata_interrupt(netdev);
         if (i == TXDATA_INTERRUPT)
 	 	handle_txdata_interrupt(netdev);	
 	

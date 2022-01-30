@@ -49,7 +49,7 @@
         from litedram.common import LiteDRAMNativePort
         from litedram.core import LiteDRAMCore
         from litedram.frontend.wishbone import LiteDRAMWishbone2Native
-        from litepcie.frontend.wishbone_dma import LitePCIe2WishboneDMA, LiteWishbone2PCIeDMA, PCIeInterruptTest
+        from litepcie.frontend.wishbone_dma import LitePCIe2WishboneDMA, LiteWishbone2PCIeDMANative, PCIeInterruptTest
         from litepcie.core import LitePCIeEndpoint, LitePCIeMSI
         from litepcie.frontend.dma import LitePCIeDMA
         from litepcie.frontend.wishbone import LitePCIeWishboneMaster
@@ -65,12 +65,20 @@
         self.add_wb_master(mmap.wishbone)
         setattr(self.submodules, f"{name}_mmap", mmap)
 
-        pcie_host_wb2pcie_dma = LiteWishbone2PCIeDMA(endpoint, data_width)
+        pcie_host_wb2pcie_dma = LiteWishbone2PCIeDMANative(endpoint, data_width)
         self.submodules.pcie_host_wb2pcie_dma = pcie_host_wb2pcie_dma
         self.pcie_mem_bus.add_master("pcie_master_wb2pcie", pcie_host_wb2pcie_dma.bus_wr)
         pcie_host_pcie2wb_dma = LitePCIe2WishboneDMA(endpoint, data_width)
         self.submodules.pcie_host_pcie2wb_dma = pcie_host_pcie2wb_dma
         self.pcie_mem_bus.add_master("pcie_master_pcie2wb", pcie_host_pcie2wb_dma.bus_rd)
+
+        self.comb += [
+            pcie_host_wb2pcie_dma.bus_addr.eq(ethmac_region.origin + ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
+            pcie_host_wb2pcie_dma.host_addr_offset.eq(ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
+            pcie_host_wb2pcie_dma.length.eq(ethmac.slot_size.read()),
+            pcie_host_wb2pcie_dma.start.eq(ethmac.interface.sram.writer.start_transfer),
+            ethmac.interface.sram.writer.transfer_ready.eq(pcie_host_wb2pcie_dma.ready),
+        ]
 
         self.submodules.pcie_mem_bus_interconnect = wishbone.InterconnectShared(
             masters=list(self.pcie_mem_bus.masters.values()),
@@ -89,7 +97,6 @@
             self.msis["ETHRX"] = ethmac.rx_pcie_irq
             self.msis["ETHTX"] = ethmac.tx_pcie_irq
             self.msis["TXDATA"] = pcie_host_pcie2wb_dma.irq
-            self.msis["RXDATA"] = pcie_host_wb2pcie_dma.irq
 
             for i, (k, v) in enumerate(sorted(self.msis.items())):
                 self.comb += msi.irqs[i].eq(v)

@@ -39,6 +39,8 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         self._ack   = CSRStorage()
         self._enable   = CSRStorage(reset=0)
         self._discard   = CSRStatus(32,reset=0)
+        self.start_transfer   = Signal(reset=0)
+        self.transfer_ready   = Signal(reset=0)
 
         self.test1 = CSRStatus(32,reset=0)
         self.test2 = CSRStatus(32,reset=0)
@@ -133,10 +135,16 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         ]
         self.submodules.irq_fsm = irq_fsm = FSM(reset_state="IDLE")
         irq_fsm.act("IDLE",
-                If(stat_fifo.source.valid, self.pcie_irq.eq(1), NextState("WAIT_ACK")),
+                If(stat_fifo.source.valid, NextState("TRANSFER")),
+        )
+        irq_fsm.act("TRANSFER",
+                self.start_transfer.eq(1), NextState("WAIT_TRANSFER"),
+        )
+        irq_fsm.act("WAIT_TRANSFER",
+                If(self.transfer_ready, self.pcie_irq.eq(1), NextState("WAIT_ACK")),
         )
         irq_fsm.act("WAIT_ACK",
-                If(self._ack.re & self._ack.storage,  NextState("IDLE")),
+                If(self._ack.re & self._ack.storage, NextState("IDLE")),
         )
         # Memory.
         wr_slot = slot
