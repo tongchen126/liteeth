@@ -72,6 +72,9 @@ struct liteeth {
 //#define LITEPCIE_DMA_BUF_ORDER (8)
 //#define LITEPCIE_DMA_BUF_SIZE (1 << (LITEPCIE_DMA_BUF_ORDER + PAGE_SHIFT))
 #define LITEPCIE_DMA_BUF_SIZE ((ETHMAC_RX_SLOTS + ETHMAC_TX_SLOTS) * ETHMAC_SLOT_SIZE)
+#define ALIGN_SIZE (512)
+
+static u8 mac_addr[] = {0x12, 0x2e, 0x60, 0xbe, 0xef, 0xbb};
 
 struct litepcie_device {
 	struct pci_dev *dev;
@@ -94,17 +97,11 @@ static inline uint32_t litepcie_readl(struct litepcie_device *s, uint32_t addr)
 	uint32_t val;
 
 	val = readl(s->bar0_addr + addr - CSR_BASE);
-#ifdef DEBUG_CSR
-	dev_dbg(&s->dev->dev, "csr_read: 0x%08x @ 0x%08x", val, addr);
-#endif
 	return val;
 }
 
 static inline void litepcie_writel(struct litepcie_device *s, uint32_t addr, uint32_t val)
 {
-#ifdef DEBUG_CSR
-	dev_dbg(&s->dev->dev, "csr_write: 0x%08x @ 0x%08x", val, addr);
-#endif
 	return writel(val, s->bar0_addr + addr - CSR_BASE);
 }
 
@@ -128,29 +125,25 @@ static void litepcie_disable_interrupt(struct litepcie_device *s, int irq_num)
 
 static void start_memcpy_toio(struct litepcie_device *s,dma_addr_t dma_addr, u32 soc_addr, u32 length)
 {
-	u32 round_length = length;
-	if ( (length % 4) != 0 )
-		round_length = ((length >> 2) + 1) << 2;
-	pci_info(s->dev,"start_memcpy_toio: dma_addr 0x%x, soc_addr 0x%x, length 0x%x, round_length 0x%x\n",dma_addr, soc_addr, length, round_length);
+	u32 round_length = ALIGN(length, ALIGN_SIZE);
+	//pci_info(s->dev,"start_memcpy_toio: dma_addr 0x%x, soc_addr 0x%x, length 0x%x, round_length 0x%x\n",dma_addr, soc_addr, length, round_length);
 	litepcie_writel(s,CSR_PCIE_HOST_PCIE2WB_DMA_HOST_ADDR_ADDR,dma_addr);
-	litepcie_writel(s,CSR_PCIE_HOST_PCIE2WB_DMA_LENGTH_ADDR, ETHMAC_SLOT_SIZE);
+	litepcie_writel(s,CSR_PCIE_HOST_PCIE2WB_DMA_LENGTH_ADDR, round_length);
 	litepcie_writel(s,CSR_PCIE_HOST_PCIE2WB_DMA_BUS_ADDR_ADDR, soc_addr);
 	litepcie_writel(s,CSR_PCIE_HOST_PCIE2WB_DMA_RD_ENABLE_ADDR, 1);
 
-	pci_info(s->dev,"start_memcpy_toio\n");
+	//pci_info(s->dev,"start_memcpy_toio\n");
 }
 static void start_memcpy_fromio(struct litepcie_device *s,dma_addr_t dma_addr, u32 soc_addr, u32 length)
 {
-	u32 round_length = length;
-	if ( (length % 4) != 0 )
-		round_length = ((length >> 2) + 1) << 2;
-	pci_info(s->dev,"start_memcpy_fromio: dma_addr 0x%x, soc_addr 0x%x, length 0x%x, round_length 0x%x\n",dma_addr, soc_addr, length, round_length);
+	u32 round_length = ALIGN(length, ALIGN_SIZE);
+	//pci_info(s->dev,"start_memcpy_fromio: dma_addr 0x%x, soc_addr 0x%x, length 0x%x, round_length 0x%x\n",dma_addr, soc_addr, length, round_length);
         litepcie_writel(s,CSR_PCIE_HOST_WB2PCIE_DMA_HOST_ADDR_ADDR,dma_addr);
-        litepcie_writel(s,CSR_PCIE_HOST_WB2PCIE_DMA_LENGTH_ADDR, ETHMAC_SLOT_SIZE);
+        litepcie_writel(s,CSR_PCIE_HOST_WB2PCIE_DMA_LENGTH_ADDR, round_length);
         litepcie_writel(s,CSR_PCIE_HOST_WB2PCIE_DMA_BUS_ADDR_ADDR, soc_addr);
         litepcie_writel(s,CSR_PCIE_HOST_WB2PCIE_DMA_WR_ENABLE_ADDR, 1);
 
-        pci_info(s->dev,"start_memcpy_fromio\n");
+        //pci_info(s->dev,"start_memcpy_fromio\n");
 }
 
 static int liteeth_open(struct net_device *netdev)
@@ -204,8 +197,7 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 
 		return NETDEV_TX_OK;
 	}
-	if (atomic_cmpxchg(&priv->tx_pending,0,1))
-		goto busy;
+	while (atomic_cmpxchg(&priv->tx_pending,0,1));
 
 	if (!litepcie_readl(lpdev,CSR_ETHMAC_SRAM_READER_READY_ADDR)) {
 		if (net_ratelimit())
@@ -213,7 +205,7 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 		atomic_set(&priv->tx_pending, 0);
 		goto busy;
 	}
-	netdev_info(netdev,"liteeth_start_xmit:skb->len %d, current slot %d, slot size\n",skb->len,priv->tx_slot,priv->slot_size);
+	//netdev_info(netdev,"liteeth_start_xmit:skb->len %d, current slot %d, slot size\n",skb->len,priv->tx_slot,priv->slot_size);
 	txbuffer = priv->tx_base + priv->tx_slot * priv->slot_size;
 	memcpy_toio(txbuffer, skb->data, skb->len);
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_SLOT_ADDR, priv->tx_slot);
@@ -252,7 +244,7 @@ static void handle_ethrx_interrupt(struct net_device *netdev)
         rx_slot = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_WRITER_SLOT_ADDR);
         len = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_WRITER_LENGTH_ADDR);
 
-        if (len == 0 || len > 2048)
+        if (len == 0 || len > ETHMAC_SLOT_SIZE)
 		goto rx_drop;
 	
 	start_memcpy_fromio(priv->lpdev,
@@ -338,7 +330,7 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 	}
 
 	irq_enable = litepcie_readl(s, CSR_PCIE_MSI_ENABLE_ADDR);
-	pci_info(s->dev,"litepcie: interrupt irq_enable 0x%x, irq_vector 0x%x, irq %d, i %d, dma data 0x%x\n",irq_enable,irq_vector,irq,i, *(int *)s->host_dma_addr);
+	//pci_info(s->dev,"litepcie: interrupt irq_enable 0x%x, irq_vector 0x%x, irq %d, i %d, dma data 0x%x\n",irq_enable,irq_vector,irq,i, *(int *)s->host_dma_addr);
 
 	if (i == ETHRX_INTERRUPT)
 		handle_ethrx_interrupt(netdev);
@@ -396,7 +388,7 @@ static int liteeth_init(struct litepcie_device *lpdev)
 	priv->tx_slot = 0;
 	priv->tx_soc_base = priv->rx_soc_base + priv->num_rx_slots * priv->slot_size;
 
-	eth_hw_addr_random(netdev);
+	memcpy(netdev->dev_addr, mac_addr, ETH_ALEN);
 
 	netdev->netdev_ops = &liteeth_netdev_ops;
 
