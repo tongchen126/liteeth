@@ -23,7 +23,7 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         self.crc_error = Signal()
 
         # Parameters Check / Compute.
-        assert dw in [8, 16, 32, 64]
+        assert dw in [8, 16, 32, 64, 128]
         slotbits   = max(int(math.log2(nslots)), 1)
         lengthbits = bits_for(depth * dw//8)
 
@@ -55,7 +55,7 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
 
         slot       = Signal(slotbits)
         length     = Signal(lengthbits)
-        length_inc = Signal(4)
+        length_inc = Signal(32)
 
         # Sink is already ready: packets are dropped when no slot is available.
         sink.ready.reset = 1
@@ -69,6 +69,14 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
             0b00010000 : length_inc.eq(5),
             0b00100000 : length_inc.eq(6),
             0b01000000 : length_inc.eq(7),
+            0b010000000: length_inc.eq(8),
+            0b0100000000: length_inc.eq(9),
+            0b01000000000: length_inc.eq(10),
+            0b010000000000: length_inc.eq(11),
+            0b0100000000000: length_inc.eq(12),
+            0b01000000000000: length_inc.eq(13),
+            0b010000000000000: length_inc.eq(14),
+            0b0100000000000000: length_inc.eq(15),
             "default"  : length_inc.eq(dw//8)
         })
 
@@ -183,7 +191,7 @@ class LiteEthMACSRAMReader(Module, AutoCSR):
         self.source = source = stream.Endpoint(eth_phy_description(dw))
 
         # Parameters Check / Compute.
-        assert dw in [8, 16, 32, 64]
+        assert dw in [8, 16, 32, 64, 128]
         slotbits   = max(int(math.log2(nslots)), 1)
         lengthbits = bits_for(depth * dw//8)
         # Event Manager.
@@ -225,6 +233,14 @@ class LiteEthMACSRAMReader(Module, AutoCSR):
                 5         : source.last_be.eq(0b00010000),
                 6         : source.last_be.eq(0b00100000),
                 7         : source.last_be.eq(0b01000000),
+                8: source.last_be.eq(0b010000000),
+                9: source.last_be.eq(0b0100000000),
+                10: source.last_be.eq(0b01000000000),
+                11: source.last_be.eq(0b010000000000),
+                12: source.last_be.eq(0b0100000000000),
+                13: source.last_be.eq(0b01000000000000),
+                14: source.last_be.eq(0b010000000000000),
+                15: source.last_be.eq(0b0100000000000000),
                 "default" : source.last_be.eq(2**(dw//8 - 1)),
             })
         )

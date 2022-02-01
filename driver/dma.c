@@ -209,7 +209,8 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 	}
 	//netdev_info(netdev,"liteeth_start_xmit:skb->len %d, current slot %d, slot size\n",skb->len,priv->tx_slot,priv->slot_size);
 	txbuffer = priv->tx_base + priv->tx_slot * priv->slot_size;
-	memcpy_toio(txbuffer, skb->data, skb->len);
+	//memcpy_toio(txbuffer, skb->data, skb->len);
+	memcpy(txbuffer, skb->data, skb->len);
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_SLOT_ADDR, priv->tx_slot);
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_LENGTH_ADDR, skb->len);
 	start_memcpy_toio(priv->lpdev, 
@@ -295,7 +296,8 @@ static int handle_ethrx_interrupt(struct net_device *netdev)
         }
 
         data = skb_put(skb, len);
-        memcpy_fromio(data, priv->rx_base + rx_slot * priv->slot_size, len);
+        //memcpy_fromio(data, priv->rx_base + rx_slot * priv->slot_size, len);
+        memcpy(data, priv->rx_base + rx_slot * priv->slot_size, len);
 	
 	litepcie_writel(lpdev,CSR_ETHMAC_SRAM_WRITER_ACK_ADDR, 1);
         skb->protocol = eth_type_trans(skb, netdev);
