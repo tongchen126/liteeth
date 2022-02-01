@@ -8,7 +8,7 @@
         # Imports
         from liteeth.mac import LiteEthMAC
         from liteeth.phy.model import LiteEthPHYModel
-        data_width=64
+        data_width=128
         self.submodules.pcie_mem_bus = SoCBusHandler(
             data_width=data_width
         )
@@ -75,7 +75,7 @@
         self.comb += [
             pcie_host_wb2pcie_dma.bus_addr.eq(ethmac_region.origin + ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
             pcie_host_wb2pcie_dma.host_addr_offset.eq(ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
-            pcie_host_wb2pcie_dma.length.eq(ethmac.slot_size.read()),
+            pcie_host_wb2pcie_dma.length.eq(1536),
             pcie_host_wb2pcie_dma.start.eq(ethmac.interface.sram.writer.start_transfer),
             ethmac.interface.sram.writer.transfer_ready.eq(pcie_host_wb2pcie_dma.ready),
         ]
