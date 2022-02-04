@@ -49,7 +49,7 @@
         from litedram.common import LiteDRAMNativePort
         from litedram.core import LiteDRAMCore
         from litedram.frontend.wishbone import LiteDRAMWishbone2Native
-        from litepcie.frontend.wishbone_dma import LitePCIe2WishboneDMA, LiteWishbone2PCIeDMANative, PCIeInterruptTest
+        from litepcie.frontend.wishbone_dma import LitePCIe2WishboneDMANative, LiteWishbone2PCIeDMANative, PCIeInterruptTest
         from litepcie.core import LitePCIeEndpoint, LitePCIeMSI
         from litepcie.frontend.dma import LitePCIeDMA
         from litepcie.frontend.wishbone import LitePCIeWishboneMaster
@@ -68,7 +68,7 @@
         pcie_host_wb2pcie_dma = LiteWishbone2PCIeDMANative(endpoint, data_width)
         self.submodules.pcie_host_wb2pcie_dma = pcie_host_wb2pcie_dma
         self.pcie_mem_bus.add_master("pcie_master_wb2pcie", pcie_host_wb2pcie_dma.bus_wr)
-        pcie_host_pcie2wb_dma = LitePCIe2WishboneDMA(endpoint, data_width)
+        pcie_host_pcie2wb_dma = LitePCIe2WishboneDMANative(endpoint, data_width)
         self.submodules.pcie_host_pcie2wb_dma = pcie_host_pcie2wb_dma
         self.pcie_mem_bus.add_master("pcie_master_pcie2wb", pcie_host_pcie2wb_dma.bus_rd)
 
@@ -79,7 +79,14 @@
             pcie_host_wb2pcie_dma.start.eq(ethmac.interface.sram.writer.start_transfer),
             ethmac.interface.sram.writer.transfer_ready.eq(pcie_host_wb2pcie_dma.ready),
         ]
-
+        self.comb += [
+            pcie_host_pcie2wb_dma.bus_addr.eq((ethmac_region.origin + (ethmac.rx_slots.read() * ethmac.slot_size.read())) +
+                                              ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
+            pcie_host_pcie2wb_dma.host_addr_offset.eq(ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
+            pcie_host_pcie2wb_dma.length.eq(1536),
+            pcie_host_pcie2wb_dma.start.eq(ethmac.interface.sram.reader.start_transfer),
+            ethmac.interface.sram.reader.transfer_ready.eq(pcie_host_pcie2wb_dma.ready),
+        ]
         self.submodules.pcie_mem_bus_interconnect = wishbone.InterconnectShared(
             masters=list(self.pcie_mem_bus.masters.values()),
             slaves=[(self.pcie_mem_bus.regions[n].decoder(self.pcie_mem_bus), s) for n, s in

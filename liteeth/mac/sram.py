@@ -205,14 +205,15 @@ class LiteEthMACSRAMReader(Module, AutoCSR):
         self._level  = CSRStatus(int(math.log2(nslots)) + 1)
         self._slot   = CSRStorage(slotbits,   reset_less=True)
         self._length = CSRStorage(lengthbits, reset_less=True)
-
+        self.start_transfer   = Signal(reset=0)
+        self.transfer_ready   = Signal(reset=0)
         # # #
         self.pcie_irq = Signal()
         read   = Signal()
         length = Signal(lengthbits)
 
         # Command FIFO.
-        cmd_fifo = stream.SyncFIFO([("slot", slotbits), ("length", lengthbits)], nslots)
+        self.cmd_fifo = cmd_fifo = stream.SyncFIFO([("slot", slotbits), ("length", lengthbits)], nslots)
         self.submodules += cmd_fifo
         self.comb += [
             cmd_fifo.sink.valid.eq(self._start.re),
@@ -249,6 +250,12 @@ class LiteEthMACSRAMReader(Module, AutoCSR):
         self.submodules.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
             If(cmd_fifo.source.valid,
+               self.start_transfer.eq(1),
+               NextState("WAIT_PCIE"),
+            )
+        )
+        fsm.act("WAIT_PCIE",
+            If(self.transfer_ready,
                 read.eq(1),
                 NextValue(length, dw//8),
                 NextState("READ")
