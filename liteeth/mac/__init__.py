@@ -66,7 +66,8 @@ class LiteEthMAC(Module, AutoCSR):
             if full_memory_we:
                 wishbone_interface = FullMemoryWE()(wishbone_interface)
             self.submodules.interface = wishbone_interface
-            self.bus = self.interface.bus
+            self.tx_bus = self.interface.tx_bus
+            self.rx_bus = self.interface.rx_bus
             self.csrs = self.interface.get_csrs() + self.core.get_csrs()
             self.rx_pcie_irq = self.interface.sram.rx_pcie_irq
             self.tx_pcie_irq = self.interface.sram.tx_pcie_irq

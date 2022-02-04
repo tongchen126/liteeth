@@ -65,6 +65,7 @@ struct liteeth {
 
 	struct litepcie_device *lpdev;
 	atomic_t tx_pending;
+	spinlock_t lock;
 };
 
 #define LITEPCIE_NAME "litepcie"
@@ -82,7 +83,6 @@ struct litepcie_device {
 	resource_size_t bar0_size;
 	phys_addr_t bar0_phys_addr;
 	uint8_t *bar0_addr; /* virtual address of BAR0 */
-	spinlock_t lock;
 	int irqs;
 	dma_addr_t dma_addr;
 	void* host_dma_addr;
@@ -181,7 +181,7 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 	struct liteeth *priv = netdev_priv(netdev);
 	struct litepcie_device *lpdev = priv->lpdev;
 	void __iomem *txbuffer;
-
+	unsigned long flags;
 	if (!litepcie_readl(lpdev,CSR_ETHMAC_SRAM_READER_READY_ADDR)) {
 		if (net_ratelimit())
 			netdev_err(netdev, "LITEETH_READER_READY not ready\n");
@@ -201,15 +201,16 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 	}
 	while (atomic_cmpxchg(&priv->tx_pending,0,1));
 
+	spin_lock_irqsave(&priv->lock, flags);
+
 	if (!litepcie_readl(lpdev,CSR_ETHMAC_SRAM_READER_READY_ADDR)) {
 		if (net_ratelimit())
-			netdev_err(netdev, "LITEETH_READER_READY not ready\n");
+			netdev_err(netdev, "LITEETH_READER_READY not ready after atomic\n");
+		spin_unlock_irqrestore(&priv->lock,flags);
 		atomic_set(&priv->tx_pending, 0);
 		goto busy;
 	}
-	//netdev_info(netdev,"liteeth_start_xmit:skb->len %d, current slot %d, slot size\n",skb->len,priv->tx_slot,priv->slot_size);
 	txbuffer = priv->tx_base + priv->tx_slot * priv->slot_size;
-	//memcpy_toio(txbuffer, skb->data, skb->len);
 	memcpy(txbuffer, skb->data, skb->len);
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_SLOT_ADDR, priv->tx_slot);
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_LENGTH_ADDR, skb->len);
@@ -218,13 +219,14 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 			priv->tx_soc_base + priv->tx_slot * priv->slot_size,
 			skb->len);
 
-	priv->tx_slot = (priv->tx_slot + 1) % priv->num_tx_slots;
+	spin_unlock_irqrestore(&priv->lock,flags);
 
+	priv->tx_slot = (priv->tx_slot + 1) % priv->num_tx_slots;
 	netdev->stats.tx_bytes += skb->len;
 	netdev->stats.tx_packets++;
 
 	dev_kfree_skb_any(skb);
-	
+
 	return NETDEV_TX_OK;
 
 busy:                
@@ -296,7 +298,6 @@ static int handle_ethrx_interrupt(struct net_device *netdev)
         }
 
         data = skb_put(skb, len);
-        //memcpy_fromio(data, priv->rx_base + rx_slot * priv->slot_size, len);
         memcpy(data, priv->rx_base + rx_slot * priv->slot_size, len);
 	
 	litepcie_writel(lpdev,CSR_ETHMAC_SRAM_WRITER_ACK_ADDR, 1);
@@ -325,9 +326,9 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 {
 	struct litepcie_device *s = (struct litepcie_device *) data;
 	struct net_device *netdev = s->ethdev->netdev;
+ 	struct liteeth *priv = netdev_priv(netdev);
 	uint32_t irq_vector, irq_enable;
 	int i;
-
 	irq_vector = 0;
 	for (i = 0; i < s->irqs; i++) {
 		if (irq == pci_irq_vector(s->dev, i)) {
@@ -335,19 +336,19 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 			break;
 		}
 	}
-
-	irq_enable = litepcie_readl(s, CSR_PCIE_MSI_ENABLE_ADDR);
+	spin_lock(&priv->lock);
+	irq_enable = litepcie_readl(s, CSR_ETHMAC_SRAM_WRITER_TIMEOUT_ADDR);
+	if (irq_enable)
+		pci_info(s->dev,"litepcie: interrupt writer_timeout 0x%x, irq_vector 0x%x, irq %d, i %d, dma data 0x%x\n",irq_enable,irq_vector,irq,i, *(int *)s->host_dma_addr);
 	//pci_info(s->dev,"litepcie: interrupt irq_enable 0x%x, irq_vector 0x%x, irq %d, i %d, dma data 0x%x\n",irq_enable,irq_vector,irq,i, *(int *)s->host_dma_addr);
 
 	if (i == ETHRX_INTERRUPT)
 		handle_ethrx_interrupt(netdev);
 	if (i == ETHTX_INTERRUPT)
 		handle_ethtx_interrupt(netdev);
-//        if (i == RXDATA_INTERRUPT)
-//	 	handle_rxdata_interrupt(netdev);
         if (i == TXDATA_INTERRUPT)
 	 	handle_txdata_interrupt(netdev);	
-	
+	spin_unlock(&priv->lock);
 	return IRQ_HANDLED;
 }
 
@@ -377,23 +378,22 @@ static int liteeth_init(struct litepcie_device *lpdev)
 
 	lpdev->ethdev = priv;
 	priv->lpdev = lpdev;
-
+	
+	spin_lock_init(&priv->lock);
 	priv->use_polling = 0;
-	//irq = pci_irq_vector(lpdev->dev,IRQ1_INTERRUPT); //FIXME:Use ethernet IRQ connected to MSI
-	//netdev->irq = irq;
 
 	liteeth_setup_slots(priv);
 
 	/* Rx slots */
 	priv->rx_base = lpdev->host_dma_addr;
 	priv->rx_base_dma = lpdev->dma_addr;
-	priv->rx_soc_base = ETHMAC_BASE;
+	priv->rx_soc_base = 0;
 
 	/* Tx slots come after Rx slots */
 	priv->tx_base = priv->rx_base + priv->num_rx_slots * priv->slot_size;
 	priv->tx_base_dma = priv->rx_base_dma + priv->num_rx_slots * priv->slot_size;
 	priv->tx_slot = 0;
-	priv->tx_soc_base = priv->rx_soc_base + priv->num_rx_slots * priv->slot_size;
+	priv->tx_soc_base = 0;
 
 	memcpy(netdev->dev_addr, mac_addr, ETH_ALEN);
 
@@ -430,7 +430,6 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	pci_set_drvdata(dev, litepcie_dev);
 	litepcie_dev->dev = dev;
 
-	spin_lock_init(&litepcie_dev->lock);
 	//INIT_WORK(&litepcie_dev->irq0_work,irq0_work_func);
 	//INIT_WORK(&litepcie_dev->irq1_work,irq1_work_func);
 

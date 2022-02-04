@@ -19,7 +19,8 @@ class LiteEthMACWishboneInterface(Module, AutoCSR):
     def __init__(self, dw, nrxslots=2, ntxslots=2, endianness="big", timestamp=None):
         self.sink   = stream.Endpoint(eth_phy_description(dw))
         self.source = stream.Endpoint(eth_phy_description(dw))
-        self.bus    = wishbone.Interface(data_width=dw)
+        self.tx_bus    = wishbone.Interface(data_width=dw)
+        self.rx_bus    = wishbone.Interface(data_width=dw)
 
         # # #
 
@@ -53,12 +54,24 @@ class LiteEthMACWishboneInterface(Module, AutoCSR):
         decoderoffset  = log2_int(sram_depth, need_pow2=False)
         rx_decoderbits = log2_int(len(wb_rx_sram_ifs))
         tx_decoderbits = log2_int(len(wb_tx_sram_ifs))
-        decoderbits    = max(rx_decoderbits, tx_decoderbits) + 1
-        wb_sram_ifs    = wb_rx_sram_ifs + wb_tx_sram_ifs
+        
+        decoderbits    = rx_decoderbits
+        wb_sram_ifs    = wb_rx_sram_ifs
         for n, wb_sram_if in enumerate(wb_sram_ifs):
             def slave_filter(a, v=n):
                 return a[decoderoffset:decoderoffset+decoderbits] == v
             wb_slaves.append((slave_filter, wb_sram_if.bus))
             self.submodules += wb_sram_if
-        wb_con = wishbone.Decoder(self.bus, wb_slaves, register=True)
+        wb_con = wishbone.Decoder(self.rx_bus, wb_slaves, register=True)
+        self.submodules += wb_con
+
+        wb_slaves      = []
+        decoderbits    = tx_decoderbits
+        wb_sram_ifs    = wb_tx_sram_ifs
+        for n, wb_sram_if in enumerate(wb_sram_ifs):
+            def slave_filter(a, v=n):
+                return a[decoderoffset:decoderoffset+decoderbits] == v
+            wb_slaves.append((slave_filter, wb_sram_if.bus))
+            self.submodules += wb_sram_if
+        wb_con = wishbone.Decoder(self.tx_bus, wb_slaves, register=True)
         self.submodules += wb_con

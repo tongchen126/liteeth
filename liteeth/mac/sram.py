@@ -39,6 +39,7 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         self._ack   = CSRStorage()
         self._enable   = CSRStorage(reset=0)
         self._discard   = CSRStatus(32,reset=0)
+        self._timeout   = CSRStatus(32,reset=0)
         self.start_transfer   = Signal(reset=0)
         self.transfer_ready   = Signal(reset=0)
 
@@ -59,7 +60,9 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
 
         # Sink is already ready: packets are dropped when no slot is available.
         sink.ready.reset = 1
-
+        ack_timeout = Signal(reset=0)
+        ack_wait_count = Signal(32,reset=0)
+        ack_timeout_count = int(500e6) # 5s
         # Decode Length increment from from last_be.
         self.comb += Case(sink.last_be, {
             0b00000001 : length_inc.eq(1),
@@ -131,7 +134,7 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         )
 
         self.comb += [
-            stat_fifo.source.ready.eq(self._ack.re & self._ack.storage),
+            stat_fifo.source.ready.eq((self._ack.re & self._ack.storage) | ack_timeout),
             self._slot.status.eq(stat_fifo.source.slot),
             self._length.status.eq(stat_fifo.source.length),
             self.test3.status.eq(stat_fifo.level)
@@ -149,10 +152,16 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
                 self.start_transfer.eq(1), NextState("WAIT_TRANSFER"),
         )
         irq_fsm.act("WAIT_TRANSFER",
-                If(self.transfer_ready, self.pcie_irq.eq(1), NextState("WAIT_ACK")),
+                If(self.transfer_ready, self.pcie_irq.eq(1), NextValue(ack_wait_count, 0), NextState("WAIT_ACK")),
         )
         irq_fsm.act("WAIT_ACK",
-                If(self._ack.re & self._ack.storage, NextState("IDLE")),
+                NextValue(ack_wait_count,ack_wait_count + 1),
+                If(ack_wait_count == ack_timeout_count,
+                   ack_timeout.eq(1),
+                   NextValue(self._timeout.status, self._timeout.status + 1),
+                   NextState("IDLE")),
+                If(self._ack.re & self._ack.storage,
+                   NextState("IDLE")),
         )
         # Memory.
         wr_slot = slot

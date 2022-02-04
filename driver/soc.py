@@ -9,7 +9,10 @@
         from liteeth.mac import LiteEthMAC
         from liteeth.phy.model import LiteEthPHYModel
         data_width=128
-        self.submodules.pcie_mem_bus = SoCBusHandler(
+        self.submodules.pcie_mem_bus_rx = SoCBusHandler(
+            data_width=data_width
+        )
+        self.submodules.pcie_mem_bus_tx = SoCBusHandler(
             data_width=data_width
         )
         # MAC.
@@ -29,11 +32,12 @@
             "eth_rx": phy_cd + "_rx"})(ethmac)
         setattr(self.submodules, name, ethmac)
         # Compute Regions size and add it to the SoC.
-        ethmac_region_size = (ethmac.rx_slots.read() + ethmac.tx_slots.read()) * ethmac.slot_size.read()
-        ethmac_region = SoCRegion(origin=self.mem_map.get(name, None), size=ethmac_region_size, cached=False)
-        self.pcie_mem_bus.add_region(name="io",region=SoCIORegion(0x00000000,0x100000000))
-        self.pcie_mem_bus.add_slave(name=name, slave=ethmac.bus, region=ethmac_region)
-        self.bus.add_region(name=name, region=ethmac_region)
+        ethmac_region_rx = SoCRegion(origin=0, size=ethmac.rx_slots.read() * ethmac.slot_size.read(), cached=False)
+        ethmac_region_tx = SoCRegion(origin=0, size=ethmac.tx_slots.read() * ethmac.slot_size.read(), cached=False)
+        self.pcie_mem_bus_rx.add_region(name="io",region=SoCIORegion(0x00000000,0x100000000))
+        self.pcie_mem_bus_tx.add_region(name="io",region=SoCIORegion(0x00000000,0x100000000))
+        self.pcie_mem_bus_rx.add_slave(name='ethmac_rx', slave=ethmac.rx_bus, region=ethmac_region_rx)
+        self.pcie_mem_bus_tx.add_slave(name='ethmac_tx', slave=ethmac.tx_bus, region=ethmac_region_tx)
 
         # Timing constraints
         if with_timing_constraints:
@@ -67,24 +71,45 @@
 
         pcie_host_wb2pcie_dma = LiteWishbone2PCIeDMANative(endpoint, data_width)
         self.submodules.pcie_host_wb2pcie_dma = pcie_host_wb2pcie_dma
-        self.pcie_mem_bus.add_master("pcie_master_wb2pcie", pcie_host_wb2pcie_dma.bus_wr)
+        self.pcie_mem_bus_rx.add_master("pcie_master_wb2pcie", pcie_host_wb2pcie_dma.bus_wr)
         pcie_host_pcie2wb_dma = LitePCIe2WishboneDMA(endpoint, data_width)
         self.submodules.pcie_host_pcie2wb_dma = pcie_host_pcie2wb_dma
-        self.pcie_mem_bus.add_master("pcie_master_pcie2wb", pcie_host_pcie2wb_dma.bus_rd)
+        self.pcie_mem_bus_tx.add_master("pcie_master_pcie2wb", pcie_host_pcie2wb_dma.bus_rd)
 
         self.comb += [
-            pcie_host_wb2pcie_dma.bus_addr.eq(ethmac_region.origin + ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
+            pcie_host_wb2pcie_dma.bus_addr.eq(ethmac_region_rx.origin + ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
             pcie_host_wb2pcie_dma.host_addr_offset.eq(ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
             pcie_host_wb2pcie_dma.length.eq(1536),
             pcie_host_wb2pcie_dma.start.eq(ethmac.interface.sram.writer.start_transfer),
             ethmac.interface.sram.writer.transfer_ready.eq(pcie_host_wb2pcie_dma.ready),
         ]
-
+        '''
         self.submodules.pcie_mem_bus_interconnect = wishbone.InterconnectShared(
             masters=list(self.pcie_mem_bus.masters.values()),
             slaves=[(self.pcie_mem_bus.regions[n].decoder(self.pcie_mem_bus), s) for n, s in
                     self.pcie_mem_bus.slaves.items()],
             register=True)
+        
+        
+        self.submodules.pcie_mem_bus_interconnect_rx = wishbone.InterconnectShared(
+            masters=list(self.pcie_mem_bus_rx.masters.values()),
+            slaves=[(self.pcie_mem_bus_rx.regions[n].decoder(self.pcie_mem_bus_rx), s) for n, s in
+                    self.pcie_mem_bus_rx.slaves.items()],
+            register=True)
+
+        self.submodules.pcie_mem_bus_interconnect_tx = wishbone.InterconnectShared(
+            masters=list(self.pcie_mem_bus_tx.masters.values()),
+            slaves=[(self.pcie_mem_bus_tx.regions[n].decoder(self.pcie_mem_bus_tx), s) for n, s in
+                    self.pcie_mem_bus_tx.slaves.items()],
+            register=True)
+        '''
+        self.submodules.bus_interconnect_tx = wishbone.InterconnectPointToPoint(
+            master=next(iter(self.pcie_mem_bus_tx.masters.values())),
+            slave=next(iter(self.pcie_mem_bus_tx.slaves.values())))
+
+        self.submodules.bus_interconnect_rx = wishbone.InterconnectPointToPoint(
+            master=next(iter(self.pcie_mem_bus_rx.masters.values())),
+            slave=next(iter(self.pcie_mem_bus_rx.slaves.values())))
 
         from litepcie.core import LitePCIeMSIMultiVector
         if with_msi:
