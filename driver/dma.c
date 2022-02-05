@@ -177,7 +177,7 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 	txbuffer = priv->tx_base + priv->tx_slot * priv->slot_size;
 	memcpy(txbuffer, skb->data, skb->len);
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_SLOT_ADDR, priv->tx_slot);
-	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_LENGTH_ADDR, skb->len);
+	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_LENGTH_ADDR, ALIGN(skb->len,ALIGN_SIZE));
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_START_ADDR, 1);
 
 	priv->tx_slot = (priv->tx_slot + 1) % priv->num_tx_slots;

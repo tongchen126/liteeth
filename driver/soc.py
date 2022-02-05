@@ -86,7 +86,7 @@
         self.comb += [
             pcie_host_pcie2wb_dma.bus_addr.eq(ethmac_region_tx.origin + ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
             pcie_host_pcie2wb_dma.host_addr_offset.eq(ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
-            pcie_host_pcie2wb_dma.length.eq(1536),
+            pcie_host_pcie2wb_dma.length.eq(ethmac.interface.sram.reader.cmd_fifo.source.length),
             pcie_host_pcie2wb_dma.start.eq(ethmac.interface.sram.reader.start_transfer),
             ethmac.interface.sram.reader.transfer_ready.eq(pcie_host_pcie2wb_dma.ready),
         ]
@@ -117,4 +117,3 @@
 
         # Timing constraints.
         self.platform.add_false_path_constraints(self.crg.cd_sys.clk, pcie_phy.cd_pcie.clk)
-
