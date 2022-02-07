@@ -76,17 +76,18 @@
         self.submodules.pcie_host_pcie2wb_dma = pcie_host_pcie2wb_dma
         self.pcie_mem_bus_tx.add_master("pcie_master_pcie2wb", pcie_host_pcie2wb_dma.bus_rd)
 
+        align_bits = log2_int(512)
         self.comb += [
             pcie_host_wb2pcie_dma.bus_addr.eq(ethmac_region_rx.origin + ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
             pcie_host_wb2pcie_dma.host_addr_offset.eq(ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
-            pcie_host_wb2pcie_dma.length.eq(1536),
+            pcie_host_wb2pcie_dma.length.eq(Cat(Signal(align_bits,reset=0), (ethmac.interface.sram.writer.stat_fifo.source.length[align_bits:] + 1))),
             pcie_host_wb2pcie_dma.start.eq(ethmac.interface.sram.writer.start_transfer),
             ethmac.interface.sram.writer.transfer_ready.eq(pcie_host_wb2pcie_dma.ready),
         ]
         self.comb += [
             pcie_host_pcie2wb_dma.bus_addr.eq(ethmac_region_tx.origin + ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
             pcie_host_pcie2wb_dma.host_addr_offset.eq(ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
-            pcie_host_pcie2wb_dma.length.eq(ethmac.interface.sram.reader.cmd_fifo.source.length),
+            pcie_host_pcie2wb_dma.length.eq(Cat(Signal(align_bits, reset=0), (ethmac.interface.sram.reader.cmd_fifo.source.length[align_bits:] + 1))),
             pcie_host_pcie2wb_dma.start.eq(ethmac.interface.sram.reader.start_transfer),
             ethmac.interface.sram.reader.transfer_ready.eq(pcie_host_pcie2wb_dma.ready),
         ]
@@ -109,7 +110,6 @@
 
             self.msis["ETHRX"] = ethmac.rx_pcie_irq
             self.msis["ETHTX"] = ethmac.tx_pcie_irq
-            self.msis["TXDATA"] = pcie_host_pcie2wb_dma.irq
 
             for i, (k, v) in enumerate(sorted(self.msis.items())):
                 self.comb += msi.irqs[i].eq(v)
