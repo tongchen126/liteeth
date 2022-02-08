@@ -23,13 +23,15 @@ class LiteEthMACWishboneInterface(Module, AutoCSR):
         self.tx_bus    = wishbone.Interface(data_width=dw)
 
         # # #
-
+        self.status = CSRStatus(32,reset=0)
         # Storage in SRAM.
         sram_depth = math.ceil(eth_mtu/(dw//8))
         self.submodules.sram = sram.LiteEthMACSRAM(dw, sram_depth, nrxslots, ntxslots, endianness, timestamp)
         self.comb += self.sink.connect(self.sram.sink)
         self.comb += self.sram.source.connect(self.source)
-
+        self.wait_ack_offset = 0
+        self.tx_ready_offset = 1
+        self.comb += self.status.status.eq((self.sram.writer.wait_ack << self.wait_ack_offset) | (self.sram.reader.cmd_fifo.sink.ready << self.tx_ready_offset))
         # Wishbone SRAM interfaces for the writer SRAM (i.e. Ethernet RX).
         wb_rx_sram_ifs = []
         for n in range(nrxslots):

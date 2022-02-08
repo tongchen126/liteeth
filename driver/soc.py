@@ -26,6 +26,8 @@
             ntxslots=ntxslots,
             timestamp=None,
             with_preamble_crc=not software_debug)
+        self.add_constant("ETHMAC_RX_WAIT_OFFSET", ethmac.interface.wait_ack_offset)
+        self.add_constant("ETHMAC_TX_READY_OFFSET", ethmac.interface.tx_ready_offset)
         # Use PHY's eth_tx/eth_rx clock domains.
         ethmac = ClockDomainsRenamer({
             "eth_tx": phy_cd + "_tx",
@@ -100,10 +102,10 @@
             master=next(iter(self.pcie_mem_bus_rx.masters.values())),
             slave=next(iter(self.pcie_mem_bus_rx.slaves.values())))
 
-        from litepcie.core import LitePCIeMSIMultiVector
+        from litepcie.core import LitePCIeMSI
         if with_msi:
             self.check_if_exists(f"{name}_msi")
-            msi = LitePCIeMSIMultiVector()
+            msi = LitePCIeMSI()
             setattr(self.submodules, f"{name}_msi", msi)
             self.comb += msi.source.connect(pcie_phy.msi)
             self.msis = {}

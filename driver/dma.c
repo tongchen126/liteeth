@@ -97,6 +97,7 @@ static int liteeth_open(struct net_device *netdev)
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,1);
 	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_WB2PCIE_DMA_HOST_BASE_ADDR_ADDR, priv->rx_base_dma);
 	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_PCIE2WB_DMA_HOST_BASE_ADDR_ADDR, priv->tx_base_dma);
+	litepcie_writel(priv->lpdev, CSR_PCIE_MSI_ENABLE_ADDR, (1 << ETHTX_INTERRUPT) | (1 << ETHRX_INTERRUPT));
 	netif_carrier_on(netdev);
 	netif_start_queue(netdev);
 
@@ -112,6 +113,7 @@ static int liteeth_stop(struct net_device *netdev)
 	netif_carrier_off(netdev);
 
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,0);
+	litepcie_writel(priv->lpdev, CSR_PCIE_MSI_ENABLE_ADDR, 0);
 
 	return 0;
 }
@@ -174,19 +176,6 @@ static const struct net_device_ops liteeth_netdev_ops = {
 	.ndo_tx_timeout		= liteeth_tx_timeout,
 };
 
-static void ethtx_check_wakeup(struct net_device *netdev)
-{
-	struct liteeth *priv = netdev_priv(netdev);
-	struct litepcie_device *lpdev = priv->lpdev;
-	u32 reg;
-
-	reg = litepcie_readl(lpdev,CSR_ETHMAC_SRAM_READER_READY_ADDR);
-	if (reg) {
-		if (netif_queue_stopped(netdev))
-			netif_wake_queue(netdev);
-	}
-}
-
 static void handle_ethrx_interrupt(struct net_device *netdev)
 {
  	struct liteeth *priv = netdev_priv(netdev);
@@ -225,21 +214,17 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 {
 	struct litepcie_device *s = (struct litepcie_device *) data;
 	struct net_device *netdev = s->ethdev->netdev;
-	uint32_t irq_vector;
-	int i;
+	u32 status;
 
-	irq_vector = 0;
-	for (i = 0; i < s->irqs; i++) {
-		if (irq == pci_irq_vector(s->dev, i)) {
-			irq_vector = (1 << i);
-			break;
-		}
-	}
-
-	if (i == ETHRX_INTERRUPT)
+	status = litepcie_readl(s, CSR_ETHMAC_STATUS_ADDR);
+	if (status & (1 << ETHMAC_RX_WAIT_OFFSET))
 		handle_ethrx_interrupt(netdev);
-	ethtx_check_wakeup(netdev);
 
+	if (status & (1 << ETHMAC_TX_READY_OFFSET)){
+		if (netif_queue_stopped(netdev))
+			netif_wake_queue(netdev);
+	}
+	
 	return IRQ_HANDLED;
 }
 
@@ -364,7 +349,7 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 		goto fail1;
 	};
 
-	irqs = pci_alloc_irq_vectors(dev, 1, 32, PCI_IRQ_MSI);
+	irqs = pci_alloc_irq_vectors(dev, 1, 1, PCI_IRQ_MSI);
 	if (irqs < 0) {
 		dev_err(&dev->dev, "Failed to enable MSI\n");
 		ret = irqs;
