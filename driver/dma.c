@@ -63,6 +63,7 @@ struct liteeth {
 	dma_addr_t rx_base_dma;
 
 	struct litepcie_device *lpdev;
+	struct napi_struct napi;
 };
 
 struct litepcie_device {
@@ -89,6 +90,24 @@ static inline void litepcie_writel(struct litepcie_device *s, uint32_t addr, uin
 	return writel(val, s->bar0_addr + addr - CSR_BASE);
 }
 
+static void litepcie_enable_interrupt(struct litepcie_device *s, int irq_num)
+{
+        uint32_t v;
+
+        v = litepcie_readl(s, CSR_PCIE_MSI_ENABLE_ADDR);
+        v |= (1 << irq_num);
+        litepcie_writel(s, CSR_PCIE_MSI_ENABLE_ADDR, v);
+}
+
+static void litepcie_disable_interrupt(struct litepcie_device *s, int irq_num)
+{
+        uint32_t v;
+
+        v = litepcie_readl(s, CSR_PCIE_MSI_ENABLE_ADDR);
+        v &= ~(1 << irq_num);
+        litepcie_writel(s, CSR_PCIE_MSI_ENABLE_ADDR, v);
+}
+
 static int liteeth_open(struct net_device *netdev)
 {
         struct liteeth *priv = netdev_priv(netdev);
@@ -97,7 +116,9 @@ static int liteeth_open(struct net_device *netdev)
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,1);
 	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_WB2PCIE_DMA_HOST_BASE_ADDR_ADDR, priv->rx_base_dma);
 	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_PCIE2WB_DMA_HOST_BASE_ADDR_ADDR, priv->tx_base_dma);
-	litepcie_writel(priv->lpdev, CSR_PCIE_MSI_ENABLE_ADDR, (1 << ETHTX_INTERRUPT) | (1 << ETHRX_INTERRUPT));
+	litepcie_enable_interrupt(priv->lpdev, ETHTX_INTERRUPT);
+	litepcie_enable_interrupt(priv->lpdev, ETHRX_INTERRUPT);
+	napi_enable(&priv->napi);
 	netif_carrier_on(netdev);
 	netif_start_queue(netdev);
 
@@ -112,8 +133,10 @@ static int liteeth_stop(struct net_device *netdev)
 	netif_stop_queue(netdev);
 	netif_carrier_off(netdev);
 
+	napi_disable(&priv->napi);
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,0);
-	litepcie_writel(priv->lpdev, CSR_PCIE_MSI_ENABLE_ADDR, 0);
+	litepcie_disable_interrupt(priv->lpdev, ETHTX_INTERRUPT);
+	litepcie_disable_interrupt(priv->lpdev, ETHRX_INTERRUPT);
 
 	return 0;
 }
@@ -176,21 +199,13 @@ static const struct net_device_ops liteeth_netdev_ops = {
 	.ndo_tx_timeout		= liteeth_tx_timeout,
 };
 
-static void handle_ethrx_interrupt(struct net_device *netdev)
+static void handle_ethrx_interrupt(struct net_device *netdev, u32 rx_slot, u32 len)
 {
  	struct liteeth *priv = netdev_priv(netdev);
- 	struct litepcie_device *lpdev = priv->lpdev;
         struct sk_buff *skb;
         unsigned char *data;
-        u32 rx_slot;
-        int len;
-
-        rx_slot = litepcie_readl(lpdev,CSR_ETHMAC_SRAM_WRITER_SLOT_ADDR);
-        len = litepcie_readl(lpdev,CSR_ETHMAC_SRAM_WRITER_LENGTH_ADDR);
-
-        skb = netdev_alloc_skb_ip_align(netdev, len);
+        skb = napi_alloc_skb(&priv->napi, len);
         if (!skb) {
-		litepcie_writel(lpdev,CSR_ETHMAC_SRAM_WRITER_ACK_ADDR, 1);
                 netdev_err(netdev, "couldn't get memory\n");
                 goto rx_drop;
         }
@@ -198,13 +213,12 @@ static void handle_ethrx_interrupt(struct net_device *netdev)
         data = skb_put(skb, len);
         memcpy(data, priv->rx_base + rx_slot * priv->slot_size, len);
 	
-	litepcie_writel(lpdev,CSR_ETHMAC_SRAM_WRITER_ACK_ADDR, 1);
         skb->protocol = eth_type_trans(skb, netdev);
 
         netdev->stats.rx_packets++;
         netdev->stats.rx_bytes += len;
 
-        netif_rx(skb);
+        netif_receive_skb(skb);
 rx_drop:
         netdev->stats.rx_dropped++;
         netdev->stats.rx_errors++;
@@ -212,20 +226,55 @@ rx_drop:
 
 static irqreturn_t litepcie_interrupt(int irq, void *data)
 {
-	struct litepcie_device *s = (struct litepcie_device *) data;
-	struct net_device *netdev = s->ethdev->netdev;
-	u32 status;
+	struct litepcie_device *lpdev = (struct litepcie_device *) data;
+	struct net_device *netdev = lpdev->ethdev->netdev;
+	struct liteeth *priv = netdev_priv(netdev);
+	u32 rx_pending;
+	u32 irq_enable;
 
-	status = litepcie_readl(s, CSR_ETHMAC_STATUS_ADDR);
-	if (status & (1 << ETHMAC_RX_WAIT_OFFSET))
-		handle_ethrx_interrupt(netdev);
+	irq_enable = litepcie_readl(lpdev, CSR_PCIE_MSI_ENABLE_ADDR);
 
-	if (status & (1 << ETHMAC_TX_READY_OFFSET)){
-		if (netif_queue_stopped(netdev))
-			netif_wake_queue(netdev);
+	if (irq_enable & (1 << ETHRX_INTERRUPT)) {
+		rx_pending = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_WRITER_PENDING_SLOTS_ADDR);
+		if (rx_pending != 0) {
+			litepcie_disable_interrupt(priv->lpdev, ETHRX_INTERRUPT);
+			napi_schedule(&priv->napi);
+		}
 	}
-	
+
+	if (netif_queue_stopped(netdev) && litepcie_readl(lpdev, CSR_ETHMAC_SRAM_READER_READY_ADDR))
+		netif_wake_queue(netdev);
+
 	return IRQ_HANDLED;
+}
+
+static int liteeth_napi_poll(struct napi_struct *napi, int budget)
+{
+	struct liteeth *priv = container_of(napi, struct liteeth, napi);
+	struct litepcie_device *lpdev = priv->lpdev;
+	u32 rx_pending, length, clear_mask;
+	int work_down, i;
+
+	clear_mask = 0;
+	work_down = 0;
+	rx_pending = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_WRITER_PENDING_SLOTS_ADDR);
+	for (i = 0; i < ETHMAC_RX_SLOTS; i++) {
+		if (rx_pending & (1 << i)) {
+			length = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_WRITER_PENDING_LENGTH_ADDR + (i << 2));
+			handle_ethrx_interrupt(priv->netdev, i, length);
+			clear_mask |= 1 << i;
+			work_down += 1;
+			if (work_down >= budget)
+				break;
+		}
+	}
+	//pci_info(lpdev->dev, "liteeth_napi_poll rx_pending %u, work_down %d, budget %d\n", rx_pending, work_down, budget);
+	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_WRITER_CLEAR_PENDING_ADDR, clear_mask);
+
+	if (work_down < budget && napi_complete_done(napi, work_down))
+		litepcie_enable_interrupt(lpdev, ETHRX_INTERRUPT);
+
+	return work_down;
 }
 
 static void liteeth_setup_slots(struct liteeth *priv)
@@ -273,7 +322,8 @@ static int liteeth_init(struct litepcie_device *lpdev)
 	netdev->netdev_ops = &liteeth_netdev_ops;
 	
 	netdev->watchdog_timeo = 60 * HZ;
-
+	
+	netif_napi_add(netdev, &priv->napi, liteeth_napi_poll, NAPI_POLL_WEIGHT);
 	err = register_netdev(netdev);
 	if (err) {
 		dev_err(&pdev->dev, "Failed to register netdev %d\n", err);

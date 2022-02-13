@@ -81,7 +81,7 @@
         align_bits = log2_int(512)
         self.comb += [
             pcie_host_wb2pcie_dma.bus_addr.eq(ethmac_region_rx.origin + ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
-            pcie_host_wb2pcie_dma.host_addr_offset.eq(ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
+            pcie_host_wb2pcie_dma.host_addr_offset.eq(ethmac.interface.sram.writer.pcie_slot * ethmac.slot_size.read()),
             pcie_host_wb2pcie_dma.length.eq(Cat(Signal(align_bits,reset=0), (ethmac.interface.sram.writer.stat_fifo.source.length[align_bits:] + 1))),
             pcie_host_wb2pcie_dma.start.eq(ethmac.interface.sram.writer.start_transfer),
             ethmac.interface.sram.writer.transfer_ready.eq(pcie_host_wb2pcie_dma.ready),

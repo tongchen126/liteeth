@@ -36,20 +36,21 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         self._slot   = CSRStatus(slotbits)
         self._length = CSRStatus(lengthbits)
         self._errors = CSRStatus(32)
-        self._ack   = CSRStorage()
         self._enable   = CSRStorage(reset=0)
         self._discard   = CSRStatus(32,reset=0)
         self.start_transfer   = Signal(reset=0)
         self.transfer_ready   = Signal(reset=0)
-        self.wait_ack = Signal(reset=0)
         self.test1 = CSRStatus(32,reset=0)
         self.test2 = CSRStatus(32,reset=0)
         self.test3 = CSRStatus(32,reset=0)
-
+        self._pending_slots = CSRStatus(nslots,reset=0)
+        self._clear_pending = CSRStorage(nslots,reset=0)
+        self._pending_length = CSRStatus(32*nslots,reset=0)
         # # #
         self.pcie_irq = Signal()
         stat_fifo_valid_tmp = Signal()
 
+        self.pcie_slot = Signal(32,reset=0)
         write   = Signal()
         errors  = self._errors.status
 
@@ -131,7 +132,6 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         )
 
         self.comb += [
-            stat_fifo.source.ready.eq(self._ack.re & self._ack.storage),
             self._slot.status.eq(stat_fifo.source.slot),
             self._length.status.eq(stat_fifo.source.length),
             self.test3.status.eq(stat_fifo.level)
@@ -142,17 +142,38 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
             If(self.pcie_irq, self.test2.status.eq(self.test2.status + 1))
         ]
         self.submodules.irq_fsm = irq_fsm = FSM(reset_state="IDLE")
+
+        self.comb += self.pcie_slot.eq(0xffffffff),
+        for i in reversed(range(nslots)): # Priority given to lower indexes.
+            self.comb += If(self._pending_slots.status[i] == 0, self.pcie_slot.eq(i))
+
+        clear_pending = Signal(32,reset=0)
+        new_pending_slots = Signal(32,reset=0)
+        pending_length = Array(Signal(32,reset=0) for i in range(nslots))
+        for i in range(nslots):
+            self.comb += [
+                self._pending_length.status[i*32:(i+1)*32].eq(pending_length[nslots-i-1]),
+            ]
+
+        self.comb += [If(self._clear_pending.re, clear_pending.eq(self._clear_pending.storage)),
+                      If(self.start_transfer,
+                         new_pending_slots.eq(1 << self.pcie_slot))]
+
+        self.sync += self._pending_slots.status.eq((self._pending_slots.status & ~clear_pending) | new_pending_slots)
+
         irq_fsm.act("IDLE",
-                If(stat_fifo.source.valid, NextState("TRANSFER")),
+                If(stat_fifo.source.valid & (self.pcie_slot != 0xffffffff),
+                   NextValue(pending_length[self.pcie_slot],stat_fifo.source.length),
+                   NextState("TRANSFER")),
         )
         irq_fsm.act("TRANSFER",
                 self.start_transfer.eq(1), NextState("WAIT_TRANSFER"),
         )
         irq_fsm.act("WAIT_TRANSFER",
-                If(self.transfer_ready, self.pcie_irq.eq(1), NextValue(self.wait_ack ,1), NextState("WAIT_ACK")),
-        )
-        irq_fsm.act("WAIT_ACK",
-                If(self._ack.re & self._ack.storage, NextValue(self.wait_ack ,0), NextState("IDLE")),
+                If(self.transfer_ready, 
+                   self.pcie_irq.eq(1), 
+                   stat_fifo.source.ready.eq(1), 
+                   NextState("IDLE")),
         )
         # Memory.
         wr_slot = slot
