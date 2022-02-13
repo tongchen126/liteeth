@@ -205,6 +205,7 @@ static void handle_ethrx_interrupt(struct net_device *netdev)
         netdev->stats.rx_bytes += len;
 
         netif_rx(skb);
+	return;
 rx_drop:
         netdev->stats.rx_dropped++;
         netdev->stats.rx_errors++;
