@@ -46,11 +46,14 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         self._pending_slots = CSRStatus(nslots,reset=0)
         self._clear_pending = CSRStorage(nslots,reset=0)
         self._pending_length = CSRStatus(32*nslots,reset=0)
+        self._pcie_host_addrs = CSRStorage(32*nslots,reset=0)
+
         # # #
         self.pcie_irq = Signal()
         stat_fifo_valid_tmp = Signal()
 
         self.pcie_slot = Signal(32,reset=0)
+        self.pcie_host_addr = Signal(32,reset=0)
         write   = Signal()
         errors  = self._errors.status
 
@@ -150,9 +153,16 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         clear_pending = Signal(32,reset=0)
         new_pending_slots = Signal(32,reset=0)
         pending_length = Array(Signal(32,reset=0) for i in range(nslots))
+        pcie_host_addrs = Array(Signal(32,reset=0) for i in range(nslots))
+
         for i in range(nslots):
             self.comb += [
                 self._pending_length.status[i*32:(i+1)*32].eq(pending_length[nslots-i-1]),
+            ]
+
+        for i in range(nslots):
+            self.comb += [
+                pcie_host_addrs[nslots-i-1].eq(self._pcie_host_addrs.storage[i*32:(i+1)*32]),
             ]
 
         self.comb += [If(self._clear_pending.re, clear_pending.eq(self._clear_pending.storage)),
@@ -164,6 +174,7 @@ class LiteEthMACSRAMWriter(Module, AutoCSR):
         irq_fsm.act("IDLE",
                 If(stat_fifo.source.valid & (self.pcie_slot != 0xffffffff),
                    NextValue(pending_length[self.pcie_slot],stat_fifo.source.length),
+                   NextValue(self.pcie_host_addr,pcie_host_addrs[self.pcie_slot]),
                    NextState("TRANSFER")),
         )
         irq_fsm.act("TRANSFER",

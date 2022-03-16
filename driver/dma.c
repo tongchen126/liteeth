@@ -45,7 +45,10 @@
 #define LITEPCIE_DMA_BUF_SIZE ((ETHMAC_RX_SLOTS + ETHMAC_TX_SLOTS) * ETHMAC_SLOT_SIZE)
 
 static u8 mac_addr[] = {0x12, 0x2e, 0x60, 0xbe, 0xef, 0xbb};
-
+struct skb_buffer_priv {
+	struct sk_buff *skb;
+	dma_addr_t dma_addr;
+};
 struct liteeth {
         void __iomem *base;
         struct net_device *netdev;
@@ -64,6 +67,7 @@ struct liteeth {
 
 	struct litepcie_device *lpdev;
 	struct napi_struct napi;
+	struct skb_buffer_priv buffer[];
 };
 
 struct litepcie_device {
@@ -108,13 +112,17 @@ static void litepcie_disable_interrupt(struct litepcie_device *s, int irq_num)
         litepcie_writel(s, CSR_PCIE_MSI_ENABLE_ADDR, v);
 }
 
+static void liteeth_rx_fill(struct liteeth *priv, u32 rx_slot);
 static int liteeth_open(struct net_device *netdev)
 {
-        struct liteeth *priv = netdev_priv(netdev);
+	struct liteeth *priv = netdev_priv(netdev);
+	int i;
 	netdev_info(netdev,"liteeth_open\n");
 
+	for (i = 0; i < ETHMAC_RX_SLOTS; i += 1)
+		liteeth_rx_fill(priv, i);
+
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,1);
-	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_WB2PCIE_DMA_HOST_BASE_ADDR_ADDR, priv->rx_base_dma);
 	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_PCIE2WB_DMA_HOST_BASE_ADDR_ADDR, priv->tx_base_dma);
 	litepcie_enable_interrupt(priv->lpdev, ETHTX_INTERRUPT);
 	litepcie_enable_interrupt(priv->lpdev, ETHRX_INTERRUPT);
@@ -128,7 +136,7 @@ static int liteeth_open(struct net_device *netdev)
 static int liteeth_stop(struct net_device *netdev)
 {
 	struct liteeth *priv = netdev_priv(netdev);
-
+	int i;
 	netdev_info(netdev,"liteeth_stop\n");
 	netif_stop_queue(netdev);
 	netif_carrier_off(netdev);
@@ -137,6 +145,11 @@ static int liteeth_stop(struct net_device *netdev)
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,0);
 	litepcie_disable_interrupt(priv->lpdev, ETHTX_INTERRUPT);
 	litepcie_disable_interrupt(priv->lpdev, ETHRX_INTERRUPT);
+
+	for (i = 0; i < ETHMAC_RX_SLOTS; i += 1){
+		dma_unmap_single(&priv->lpdev->dev->dev, priv->buffer[i].dma_addr, priv->slot_size, DMA_FROM_DEVICE);
+		dev_kfree_skb_any(priv->buffer[i].skb);
+	}
 
 	return 0;
 }
@@ -199,30 +212,41 @@ static const struct net_device_ops liteeth_netdev_ops = {
 	.ndo_tx_timeout		= liteeth_tx_timeout,
 };
 
+static void liteeth_rx_fill(struct liteeth *priv, u32 rx_slot)
+{
+	struct sk_buff *skb;
+
+	skb = __napi_alloc_skb(&priv->napi, priv->slot_size, GFP_DMA);
+	//skb = __netdev_alloc_skb_ip_align(priv->netdev, priv->slot_size, GFP_DMA);
+	//skb = __netdev_alloc_skb(priv->netdev, priv->slot_size, GFP_KERNEL);
+
+	WARN_ON(skb == NULL);
+
+	priv->buffer[rx_slot].skb = skb;
+	priv->buffer[rx_slot].dma_addr = dma_map_single(&priv->lpdev->dev->dev, skb->data, priv->slot_size, DMA_FROM_DEVICE);
+	//pci_info(priv->lpdev->dev, "rx slot: %d, dma addr 0x%x\n", rx_slot, priv->buffer[rx_slot].dma_addr);
+	litepcie_writel(priv->lpdev, CSR_ETHMAC_SRAM_WRITER_PCIE_HOST_ADDRS_ADDR + (rx_slot << 2), priv->buffer[rx_slot].dma_addr);
+}
 static void handle_ethrx_interrupt(struct net_device *netdev, u32 rx_slot, u32 len)
 {
  	struct liteeth *priv = netdev_priv(netdev);
         struct sk_buff *skb;
         unsigned char *data;
-        skb = napi_alloc_skb(&priv->napi, len);
-        if (!skb) {
-                netdev_err(netdev, "couldn't get memory\n");
-                goto rx_drop;
-        }
+        skb = priv->buffer[rx_slot].skb;
 
         data = skb_put(skb, len);
-        memcpy(data, priv->rx_base + rx_slot * priv->slot_size, len);
 	
         skb->protocol = eth_type_trans(skb, netdev);
 
         netdev->stats.rx_packets++;
         netdev->stats.rx_bytes += len;
 
+	dma_unmap_single(&priv->lpdev->dev->dev, priv->buffer[rx_slot].dma_addr, priv->slot_size, DMA_FROM_DEVICE);
+
         netif_receive_skb(skb);
+
+	liteeth_rx_fill(priv, rx_slot);
 	return;
-rx_drop:
-        netdev->stats.rx_dropped++;
-        netdev->stats.rx_errors++;
 }
 
 static irqreturn_t litepcie_interrupt(int irq, void *data)
@@ -293,7 +317,7 @@ static int liteeth_init(struct litepcie_device *lpdev)
 	int err;
 
 	pdev = lpdev->dev;
-	netdev = devm_alloc_etherdev(&pdev->dev, sizeof(*priv));
+	netdev = devm_alloc_etherdev(&pdev->dev, sizeof(*priv) + sizeof(struct skb_buffer_priv) * ETHMAC_RX_SLOTS);
 	if (!netdev)
 		return -ENOMEM;
 
