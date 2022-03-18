@@ -216,9 +216,7 @@ static void liteeth_rx_fill(struct liteeth *priv, u32 rx_slot)
 {
 	struct sk_buff *skb;
 
-	//skb = __napi_alloc_skb(&priv->napi, priv->slot_size, GFP_DMA);
-	skb = __netdev_alloc_skb_ip_align(priv->netdev, priv->slot_size, GFP_DMA);
-	//skb = __netdev_alloc_skb(priv->netdev, priv->slot_size, GFP_KERNEL);
+	skb = __netdev_alloc_skb(priv->netdev, priv->slot_size, GFP_DMA32);
 
 	WARN_ON(skb == NULL);
 
