@@ -82,15 +82,13 @@
         self.comb += [
             pcie_host_wb2pcie_dma.bus_addr.eq(ethmac_region_rx.origin + ethmac.interface.sram.writer.stat_fifo.source.slot * ethmac.slot_size.read()),
             pcie_host_wb2pcie_dma.host_addr.eq(ethmac.interface.sram.writer.pcie_host_addr),
-            pcie_host_wb2pcie_dma.use_offset.eq(0),
             pcie_host_wb2pcie_dma.length.eq(Cat(Signal(align_bits,reset=0), (ethmac.interface.sram.writer.stat_fifo.source.length[align_bits:] + 1))),
             pcie_host_wb2pcie_dma.start.eq(ethmac.interface.sram.writer.start_transfer),
             ethmac.interface.sram.writer.transfer_ready.eq(pcie_host_wb2pcie_dma.ready),
         ]
         self.comb += [
             pcie_host_pcie2wb_dma.bus_addr.eq(ethmac_region_tx.origin + ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
-            pcie_host_pcie2wb_dma.host_addr_offset.eq(ethmac.interface.sram.reader.cmd_fifo.source.slot * ethmac.slot_size.read()),
-            pcie_host_pcie2wb_dma.use_offset.eq(1),
+            pcie_host_pcie2wb_dma.host_addr.eq(ethmac.interface.sram.reader.pcie_host_addr),
             pcie_host_pcie2wb_dma.length.eq(Cat(Signal(align_bits, reset=0), (ethmac.interface.sram.reader.cmd_fifo.source.length[align_bits:] + 1))),
             pcie_host_pcie2wb_dma.start.eq(ethmac.interface.sram.reader.start_transfer),
             ethmac.interface.sram.reader.transfer_ready.eq(pcie_host_pcie2wb_dma.ready),

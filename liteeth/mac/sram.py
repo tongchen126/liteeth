@@ -239,8 +239,11 @@ class LiteEthMACSRAMReader(Module, AutoCSR):
         self._length = CSRStorage(lengthbits, reset_less=True)
         self.start_transfer   = Signal(reset=0)
         self.transfer_ready   = Signal(reset=0)
+        self._pcie_base_addr = CSRStorage(32,reset=0)
         # # #
+        slot_size = CSRConstant(2 ** bits_for(eth_mtu))
         self.pcie_irq = Signal()
+        self.pcie_host_addr = Signal(32,reset=0)
         read   = Signal()
         length = Signal(lengthbits)
 
@@ -252,7 +255,8 @@ class LiteEthMACSRAMReader(Module, AutoCSR):
             cmd_fifo.sink.slot.eq(self._slot.storage),
             cmd_fifo.sink.length.eq(self._length.storage),
             self._ready.status.eq(cmd_fifo.sink.ready),
-            self._level.status.eq(cmd_fifo.level)
+            self._level.status.eq(cmd_fifo.level),
+            self.pcie_host_addr.eq(self._pcie_base_addr.storage + cmd_fifo.source.slot * slot_size.read())
         ]
 
         # Encode Length to last_be.

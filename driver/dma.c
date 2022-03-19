@@ -123,7 +123,7 @@ static int liteeth_open(struct net_device *netdev)
 		liteeth_rx_fill(priv, i);
 
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,1);
-	litepcie_writel(priv->lpdev, CSR_PCIE_HOST_PCIE2WB_DMA_HOST_BASE_ADDR_ADDR, priv->tx_base_dma);
+	litepcie_writel(priv->lpdev, CSR_ETHMAC_SRAM_READER_PCIE_BASE_ADDR_ADDR, priv->tx_base_dma);
 	litepcie_enable_interrupt(priv->lpdev, ETHTX_INTERRUPT);
 	litepcie_enable_interrupt(priv->lpdev, ETHRX_INTERRUPT);
 	napi_enable(&priv->napi);
