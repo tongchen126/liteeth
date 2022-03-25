@@ -216,9 +216,7 @@ static void liteeth_rx_fill(struct liteeth *priv, u32 rx_slot)
 {
 	struct sk_buff *skb;
 
-	skb = __netdev_alloc_skb(priv->netdev, priv->slot_size, GFP_DMA32);
-
-	WARN_ON(skb == NULL);
+	skb = __netdev_alloc_skb(priv->netdev, priv->slot_size, GFP_DMA);
 
 	priv->buffer[rx_slot].skb = skb;
 	priv->buffer[rx_slot].dma_addr = dma_map_single(&priv->lpdev->dev->dev, skb->data, priv->slot_size, DMA_FROM_DEVICE);
@@ -241,7 +239,8 @@ static void handle_ethrx_interrupt(struct net_device *netdev, u32 rx_slot, u32 l
 
 	dma_unmap_single(&priv->lpdev->dev->dev, priv->buffer[rx_slot].dma_addr, priv->slot_size, DMA_FROM_DEVICE);
 
-        netif_receive_skb(skb);
+	//netif_receive_skb(skb);
+	napi_gro_receive(&priv->napi, skb);
 
 	liteeth_rx_fill(priv, rx_slot);
 	return;
