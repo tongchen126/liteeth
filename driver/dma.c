@@ -115,7 +115,7 @@ static int liteeth_open(struct net_device *netdev)
 	int i;
 	netdev_info(netdev,"liteeth_open\n");
 
-	for (i = 0; i < ETHMAC_RX_SLOTS; i += 1)
+	for (i = 0; i < priv->num_rx_slots; i += 1)
 		liteeth_rx_fill(priv, i);
 
 	litepcie_writel(priv->lpdev,CSR_ETHMAC_SRAM_WRITER_ENABLE_ADDR,1);
@@ -142,7 +142,7 @@ static int liteeth_stop(struct net_device *netdev)
 	litepcie_disable_interrupt(priv->lpdev, ETHTX_INTERRUPT);
 	litepcie_disable_interrupt(priv->lpdev, ETHRX_INTERRUPT);
 
-	for (i = 0; i < ETHMAC_RX_SLOTS; i += 1){
+	for (i = 0; i < priv->num_rx_slots; i += 1){
 		dma_unmap_single(&priv->lpdev->dev->dev, priv->buffer[i].dma_addr, priv->slot_size, DMA_FROM_DEVICE);
 		dev_kfree_skb_any(priv->buffer[i].skb);
 	}
@@ -158,7 +158,7 @@ static void liteeth_clear_pending_tx_dma(struct liteeth *priv)
 	int i;
 
 	pending_tx = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_READER_PENDING_SLOTS_ADDR);
-	for (i = 0; i < ETHMAC_TX_SLOTS; i++)
+	for (i = 0; i < priv->num_tx_slots; i++)
 		if (pending_tx & (1 << i))
 			dma_unmap_single(&priv->lpdev->dev->dev, priv->buffer[i].tx_dma_addr, priv->buffer[i].tx_len, DMA_TO_DEVICE);
 
@@ -231,7 +231,7 @@ static void liteeth_rx_fill(struct liteeth *priv, u32 rx_slot)
 {
 	struct sk_buff *skb;
 
-	skb = __netdev_alloc_skb(priv->netdev, priv->slot_size, GFP_DMA);
+	skb = __netdev_alloc_skb_ip_align(priv->netdev, priv->slot_size, GFP_ATOMIC);
 
 	priv->buffer[rx_slot].skb = skb;
 	priv->buffer[rx_slot].dma_addr = dma_map_single(&priv->lpdev->dev->dev, skb->data, priv->slot_size, DMA_FROM_DEVICE);
@@ -240,23 +240,24 @@ static void liteeth_rx_fill(struct liteeth *priv, u32 rx_slot)
 }
 static void handle_ethrx_interrupt(struct net_device *netdev, u32 rx_slot, u32 len)
 {
- 	struct liteeth *priv = netdev_priv(netdev);
-        struct sk_buff *skb;
-        unsigned char *data;
-        skb = priv->buffer[rx_slot].skb;
-
-        data = skb_put(skb, len);
-	
-        skb->protocol = eth_type_trans(skb, netdev);
-
-        netdev->stats.rx_packets++;
-        netdev->stats.rx_bytes += len;
+	struct liteeth *priv = netdev_priv(netdev);
+	struct sk_buff *skb;
+	unsigned char *data;
 
 	dma_unmap_single(&priv->lpdev->dev->dev, priv->buffer[rx_slot].dma_addr, priv->slot_size, DMA_FROM_DEVICE);
+
+	skb = priv->buffer[rx_slot].skb;
+
+	data = skb_put(skb, len);
+
+	skb->protocol = eth_type_trans(skb, netdev);
 
 	napi_gro_receive(&priv->napi, skb);
 
 	liteeth_rx_fill(priv, rx_slot);
+
+	netdev->stats.rx_packets++;
+	netdev->stats.rx_bytes += len;
 
 	return;
 }
@@ -295,7 +296,7 @@ static int liteeth_napi_poll(struct napi_struct *napi, int budget)
 	clear_mask = 0;
 	work_down = 0;
 	rx_pending = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_WRITER_PENDING_SLOTS_ADDR);
-	for (i = 0; i < ETHMAC_RX_SLOTS; i++) {
+	for (i = 0; i < priv->num_rx_slots; i++) {
 		if (rx_pending & (1 << i)) {
 			length = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_WRITER_PENDING_LENGTH_ADDR + (i << 2));
 			handle_ethrx_interrupt(priv->netdev, i, length);
