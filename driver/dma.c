@@ -280,7 +280,7 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 		}
 	}
 
-	if (netif_queue_stopped(netdev) && litepcie_readl(lpdev, CSR_ETHMAC_SRAM_READER_READY_ADDR))
+	if ((irq_enable & (1 << ETHTX_INTERRUPT)) && netif_queue_stopped(netdev) && litepcie_readl(lpdev, CSR_ETHMAC_SRAM_READER_READY_ADDR))
 		netif_wake_queue(netdev);
 
 	return IRQ_HANDLED;
