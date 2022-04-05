@@ -50,6 +50,7 @@ struct skb_buffer_priv {
 	dma_addr_t dma_addr;
 	u32 tx_len;
 	dma_addr_t tx_dma_addr;
+	struct sk_buff *tx_skb;
 };
 struct liteeth {
         void __iomem *base;
@@ -159,8 +160,10 @@ static void liteeth_clear_pending_tx_dma(struct liteeth *priv)
 
 	pending_tx = litepcie_readl(lpdev, CSR_ETHMAC_SRAM_READER_PENDING_SLOTS_ADDR);
 	for (i = 0; i < priv->num_tx_slots; i++)
-		if (pending_tx & (1 << i))
+		if (pending_tx & (1 << i)) {
 			dma_unmap_single(&priv->lpdev->dev->dev, priv->buffer[i].tx_dma_addr, priv->buffer[i].tx_len, DMA_TO_DEVICE);
+			dev_kfree_skb_any(priv->buffer[i].tx_skb);
+		}
 
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_CLEAR_PENDING_ADDR, pending_tx);
 }
@@ -186,6 +189,7 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 
 	priv->buffer[priv->tx_slot].tx_dma_addr = dma_map_single(&priv->lpdev->dev->dev, skb->data, skb->len, DMA_TO_DEVICE);
 	priv->buffer[priv->tx_slot].tx_len = skb->len;
+	priv->buffer[priv->tx_slot].tx_skb = skb;
 
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_SLOT_ADDR, priv->tx_slot);
 	litepcie_writel(lpdev, CSR_ETHMAC_SRAM_READER_LENGTH_ADDR, skb->len);
@@ -196,8 +200,6 @@ static int liteeth_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 
 	netdev->stats.tx_bytes += skb->len;
 	netdev->stats.tx_packets++;
-
-	dev_kfree_skb_any(skb);
 	
 	return NETDEV_TX_OK;
 
