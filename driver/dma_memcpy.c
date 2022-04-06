@@ -443,7 +443,7 @@ static void litepcie_pci_remove(struct pci_dev *dev)
 	/* Disable all interrupts */
 	litepcie_writel(litepcie_dev, CSR_PCIE_MSI_ENABLE_ADDR, 0);
 
-	dma_free_coherent(&dev->dev, LITEPCIE_DMA_BUF_SIZE, &priv->tx_addr, priv->tx_dma_addr);
+	dma_free_coherent(&dev->dev, LITEPCIE_DMA_BUF_SIZE, priv->tx_addr, priv->tx_dma_addr);
 
 	/* Free all interrupts */
 	for (i = 0; i < litepcie_dev->irqs; i++) {
